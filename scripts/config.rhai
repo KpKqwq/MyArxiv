@@ -1,6 +1,6 @@
 let titles_type = ["Dataset", "Survey", "Review", "Overview"];
 let titles_model = ["BERT", "GPT", "Transformer"];
-let titles_method = ["KV","Compression","Training-free","Neuron","SAE","Efficient","Efficiency","Envolve","Unlearning","Activation","Steer","Memory","Parameter","Mechanism","Reason","Reasoning","Latent","Diffusion","Dynamic","Linear","Parametric","Long","Overthinking","Agentic","Prompt","Report"];
+let titles_method = ["KV","Compression","Training-free","Neuron","SAE","Efficient","Efficiency","Envolve","Unlearning","Activation","Steer","Memory","Parameter","Mechanism","Reason","Reasoning","Latent","Diffusion","Dynamic","Linear","Parametric","Long","Overthinking","Agentic","Prompt","Report"，"Reinforcement"];
 let titles =  titles_model + titles_method + titles_type;
 let authors_array = ["Yann LeCun", "Geoffrey Hinton", "Yoshua Bengio", "Yu ZePing","Kang Liu"];
 
