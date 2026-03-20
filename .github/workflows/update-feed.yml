@@ -6,16 +6,10 @@
       branches:                                                                                                                                                                   
         - main                                                                                                                                                                    
     schedule:                                                                                                                                                                     
-      # Run shortly after the daily arXiv release window, plus a backup run                                                                                                       
-      # in case GitHub Actions drops or delays a scheduled trigger.                                                                                                               
+      # Adjust refresh schedule here. By default, it runs once per day.                                                                                                           
       # Syntax reference: https://docs.github.com/en/actions/reference/events-that-trigger-workflows#schedule                                                                     
       # Recommended tool: https://crontab.guru/                                                                                                                                   
-      - cron: "30 18 * * *"                                                                                                                                                       
-      - cron: "30 1 * * *"                                                                                                                                                        
-                                                                                                                                                                                  
-  concurrency:                                                                                                                                                                    
-    group: update-feed                                                                                                                                                            
-    cancel-in-progress: false                                                                                                                                                     
+      - cron: "12 5 * * *"                                                                                                                                                        
                                                                                                                                                                                   
   jobs:                                                                                                                                                                           
     build:                                                                                                                                                                        
