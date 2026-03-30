@@ -41,8 +41,19 @@ jobs:
               "$(cat asset.url)"
           tar -zxvf arxivfeed.tgz --strip-components 1 $(tar tf arxivfeed.tgz | grep /arxivfeed)
           chmod +x arxivfeed
+      - name: Show workspace
+        run: |
+          set -euxo pipefail
+          pwd
+          ls -la
+          [ -f config.toml ] && sed -n '1,120p' config.toml || echo "config.toml not found"
+      
       - name: Build rss
-        run: ./arxivfeed
+        run: |
+          set -euxo pipefail
+          ./arxivfeed 2>&1 | tee arxivfeed.log
+          ls -la
+          ls -la target || true
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v3
         with:
