@@ -3,7 +3,7 @@ limit_days = 14
 cache_url = "KpKqwq.github.io/MyArxiv/cache.json"
 
 [[sources]]
-limit = 2000
+limit = 4000
 category = "cs.CL"
 title = "Computation and Language"
 
