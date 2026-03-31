@@ -8,7 +8,7 @@ category = "cs.CL"
 title = "Computation and Language"
 
 [[sources]]
-limit = 500
+limit = 1000
 category = "cs.RO"
 title = "VLA"
 
@@ -18,7 +18,7 @@ title = "VLA"
 # title = "Computer Vision and Pattern Recognition"
 
 [[sources]]
-limit = 500
+limit = 1000
 category = "cs.IR"
 title = "Information Retrieval"
 
@@ -28,7 +28,7 @@ title = "Information Retrieval"
 # title = "Machine Learning"
 
 [[sources]]
-limit = 500
+limit = 1000
 category = "cs.MM"
 title = "Multimedia"
 
