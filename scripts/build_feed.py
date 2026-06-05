@@ -5,10 +5,13 @@ import time
 import tomllib
 import urllib.request
 import xml.etree.ElementTree as ET
-from datetime import datetime, timezone, timedelta
-from email.utils import format_datetime
+from datetime import datetime, timezone
+from email.utils import format_datetime, parsedate_to_datetime
 
-import arxiv
+import feedparser
+
+
+USER_AGENT = "KpKqwq-MyArxiv/1.0 (GitHub Actions; https://github.com/KpKqwq/MyArxiv)"
 
 
 def load_config(path="config.toml"):
@@ -20,84 +23,157 @@ def normalize_text(s):
     return " ".join((s or "").split())
 
 
-def paper_to_dict(paper, source_title):
-    authors = [str(a) for a in paper.authors]
-    published = paper.published.astimezone(timezone.utc)
-    updated = paper.updated.astimezone(timezone.utc)
+def parse_date(value):
+    if not value:
+        return datetime.now(timezone.utc)
+    try:
+        return parsedate_to_datetime(value).astimezone(timezone.utc)
+    except Exception:
+        return datetime.now(timezone.utc)
 
-    return {
-        "id": paper.entry_id,
-        "title": normalize_text(paper.title),
-        "authors": authors,
-        "summary": normalize_text(paper.summary),
-        "published": published.isoformat(),
-        "updated": updated.isoformat(),
-        "pdf_url": paper.pdf_url,
-        "entry_url": paper.entry_id,
-        "primary_category": getattr(paper, "primary_category", ""),
-        "categories": list(getattr(paper, "categories", []) or []),
-        "comment": getattr(paper, "comment", None),
-        "source_title": source_title,
-    }
+
+def get_authors(entry):
+    authors = []
+
+    for author in entry.get("authors", []) or []:
+        name = author.get("name")
+        if name:
+            authors.append(name)
+
+    if not authors and entry.get("author"):
+        authors.append(entry.get("author"))
+
+    return authors
+
+
+def clean_summary(entry):
+    summary = entry.get("summary") or entry.get("description") or ""
+    return normalize_text(summary)
+
+
+def fetch_category(category, source_title):
+    url = f"https://rss.arxiv.org/rss/{category}"
+    print(f"Fetching RSS: {url}")
+
+    feed = feedparser.parse(
+        url,
+        request_headers={
+            "User-Agent": USER_AGENT,
+            "Accept": "application/rss+xml, application/xml;q=0.9, */*;q=0.8",
+        },
+    )
+
+    status = getattr(feed, "status", None)
+    if status and status >= 400:
+        raise RuntimeError(f"RSS request failed: HTTP {status} for {url}")
+
+    papers = []
+
+    for entry in feed.entries:
+        link = entry.get("link", "")
+        title = normalize_text(entry.get("title", "Untitled"))
+        summary = clean_summary(entry)
+        authors = get_authors(entry)
+
+        published_dt = parse_date(entry.get("published") or entry.get("updated"))
+        updated_dt = parse_date(entry.get("updated") or entry.get("published"))
+
+        arxiv_id = entry.get("id") or link or title
+
+        pdf_url = link
+        if "/abs/" in pdf_url:
+            pdf_url = pdf_url.replace("/abs/", "/pdf/")
+
+        papers.append(
+            {
+                "id": arxiv_id,
+                "title": title,
+                "authors": authors,
+                "summary": summary,
+                "published": published_dt.isoformat(),
+                "updated": updated_dt.isoformat(),
+                "pdf_url": pdf_url,
+                "entry_url": link,
+                "primary_category": category,
+                "categories": [category],
+                "comment": None,
+                "source_title": source_title,
+            }
+        )
+
+    return papers
+
+
+def load_remote_cache(config):
+    cache_url = config.get("cache_url")
+    if not cache_url:
+        return []
+
+    print(f"Trying fallback cache: {cache_url}")
+
+    try:
+        req = urllib.request.Request(
+            cache_url,
+            headers={
+                "User-Agent": USER_AGENT,
+                "Accept": "application/json",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+
+        if isinstance(data, list):
+            return data
+
+        print("Remote cache exists but is not a list; ignoring.")
+        return []
+
+    except Exception as e:
+        print(f"Fallback cache unavailable: {e}")
+        return []
 
 
 def fetch_papers(config):
-    limit_days = int(config.get("limit_days", 7))
-    cutoff = datetime.now(timezone.utc) - timedelta(days=limit_days)
-
-    client = arxiv.Client(
-        page_size=100,
-        delay_seconds=3.2,
-        num_retries=5,
-    )
-
     all_papers = {}
-    sources = config.get("sources", [])
 
-    for source in sources:
+    for source in config.get("sources", []):
         category = source["category"]
         source_title = source.get("title", category)
 
-        # 避免一次拉 4000/1000 导致大量分页请求。
-        # 对个人日报/周报来说，300 通常已经足够；需要更多可以改成 500。
-        max_results = min(int(source.get("limit", 100)), 300)
+        try:
+            papers = fetch_category(category, source_title)
+        except Exception as e:
+            print(f"Failed to fetch {category}: {e}")
+            continue
 
-        print(f"Fetching {category}, max_results={max_results}")
+        for p in papers:
+            key = p["id"] or p["entry_url"] or p["title"]
 
-        search = arxiv.Search(
-            query=f"cat:{category}",
-            max_results=max_results,
-            sort_by=arxiv.SortCriterion.SubmittedDate,
-            sort_order=arxiv.SortOrder.Descending,
-        )
-
-        for paper in client.results(search):
-            updated = paper.updated.astimezone(timezone.utc)
-            published = paper.published.astimezone(timezone.utc)
-
-            # arXiv 有些文章是 replace/update；这里 published/updated 二者命中任一即可保留。
-            if published < cutoff and updated < cutoff:
-                continue
-
-            item = paper_to_dict(paper, source_title)
-
-            # 多个 category 命中同一篇论文时去重。
-            old = all_papers.get(item["id"])
+            old = all_papers.get(key)
             if old:
                 if source_title not in old["source_title"]:
                     old["source_title"] += f", {source_title}"
+                old["categories"] = sorted(set(old.get("categories", []) + [category]))
             else:
-                all_papers[item["id"]] = item
+                all_papers[key] = p
 
-        # 多 source 之间再稍微让一下，避免撞 API。
         time.sleep(3.2)
 
     papers = sorted(
         all_papers.values(),
-        key=lambda x: x["updated"],
+        key=lambda x: x.get("updated", ""),
         reverse=True,
     )
-    return papers
+
+    if papers:
+        return papers
+
+    cached = load_remote_cache(config)
+    if cached:
+        print(f"Using fallback cache with {len(cached)} papers")
+        return cached
+
+    raise RuntimeError("No papers fetched and no usable cache found.")
 
 
 def write_cache(papers, out_dir):
@@ -119,20 +195,25 @@ def write_rss(papers, config, out_dir):
 
     for p in papers:
         item = ET.SubElement(channel, "item")
-        ET.SubElement(item, "title").text = p["title"]
-        ET.SubElement(item, "link").text = p["entry_url"]
-        ET.SubElement(item, "guid").text = p["id"]
-        ET.SubElement(item, "pubDate").text = format_datetime(
-            datetime.fromisoformat(p["updated"])
-        )
 
-        authors = ", ".join(p["authors"])
+        ET.SubElement(item, "title").text = p.get("title", "Untitled")
+        ET.SubElement(item, "link").text = p.get("entry_url") or p.get("id") or ""
+        ET.SubElement(item, "guid").text = p.get("id") or p.get("entry_url") or p.get("title", "")
+
+        try:
+            pub_dt = datetime.fromisoformat(p.get("updated", ""))
+        except Exception:
+            pub_dt = datetime.now(timezone.utc)
+
+        ET.SubElement(item, "pubDate").text = format_datetime(pub_dt)
+
+        authors = ", ".join(p.get("authors", []) or [])
         desc = f"""
         <p><b>Authors:</b> {html.escape(authors)}</p>
         <p><b>Category:</b> {html.escape(p.get("primary_category", ""))}</p>
         <p><b>Source:</b> {html.escape(p.get("source_title", ""))}</p>
-        <p>{html.escape(p["summary"])}</p>
-        <p><a href="{html.escape(p["pdf_url"])}">PDF</a></p>
+        <p>{html.escape(p.get("summary", ""))}</p>
+        <p><a href="{html.escape(p.get("pdf_url", ""))}">PDF</a></p>
         """
         ET.SubElement(item, "description").text = desc
 
@@ -149,16 +230,18 @@ def write_index(papers, config, out_dir):
     site_title = html.escape(config.get("site_title", "MyArxiv"))
 
     rows = []
-    for p in papers:
-        authors = html.escape(", ".join(p["authors"]))
-        title = html.escape(p["title"])
-        summary = html.escape(p["summary"])
-        entry_url = html.escape(p["entry_url"])
-        pdf_url = html.escape(p["pdf_url"])
-        source_title = html.escape(p.get("source_title", ""))
-        updated = html.escape(p["updated"][:10])
 
-        rows.append(f"""
+    for p in papers:
+        authors = html.escape(", ".join(p.get("authors", []) or []))
+        title = html.escape(p.get("title", "Untitled"))
+        summary = html.escape(p.get("summary", ""))
+        entry_url = html.escape(p.get("entry_url") or p.get("id") or "")
+        pdf_url = html.escape(p.get("pdf_url") or entry_url)
+        source_title = html.escape(p.get("source_title", ""))
+        updated = html.escape((p.get("updated") or "")[:10])
+
+        rows.append(
+            f"""
         <article>
           <h2><a href="{entry_url}">{title}</a></h2>
           <div class="meta">{updated} · {source_title}</div>
@@ -166,9 +249,8 @@ def write_index(papers, config, out_dir):
           <p>{summary}</p>
           <p><a href="{pdf_url}">PDF</a></p>
         </article>
-        """)
-
-    body = "\n".join(rows)
+        """
+        )
 
     html_doc = f"""<!doctype html>
 <html lang="zh-CN">
@@ -200,7 +282,7 @@ def write_index(papers, config, out_dir):
 <body>
   <h1>{site_title}</h1>
   <p><a href="rss.xml">RSS</a> · Generated at {html.escape(datetime.now(timezone.utc).isoformat())}</p>
-  {body}
+  {"".join(rows)}
 </body>
 </html>
 """
@@ -215,7 +297,7 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
 
     papers = fetch_papers(config)
-    print(f"Fetched {len(papers)} papers")
+    print(f"Total papers: {len(papers)}")
 
     write_cache(papers, out_dir)
     write_rss(papers, config, out_dir)
