@@ -1,7 +1,6 @@
 site_title = "MyArxiv"
 limit_days = 14
-cache_url = "KpKqwq.github.io/MyArxiv/cache.json"
-
+cache_url = "https://KpKqwq.github.io/MyArxiv/cache.json"
 [[sources]]
 limit = 4000
 category = "cs.CL"
