@@ -4,7 +4,7 @@ A MyArxiv-compatible feed builder.
 
 It keeps the original MyArxiv page features (CSS/JS layout, title/author/conference
 highlighting, ☆/★ and ♻ markers) while avoiding export.arxiv.org/api/query.
-Data is fetched from official arXiv RSS category feeds.
+Data is fetched from arXiv past-week list pages plus official RSS category feeds.
 """
 
 from __future__ import annotations
@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 import feedparser
+from bs4 import BeautifulSoup
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -112,6 +113,50 @@ def clean_rss_title(title: str) -> str:
     title = re.sub(r"^arXiv:\S+\s*", "", title, flags=re.IGNORECASE)
     title = re.sub(r"^\[[^\]]+\]\s*", "", title)
     return title or "Untitled"
+
+
+def canonical_arxiv_id(value: str | None) -> str:
+    """Return a stable arXiv id key without version suffix when possible."""
+    text = str(value or "")
+    match = re.search(r"(\d{4}\.\d{4,5})(?:v\d+)?", text)
+    if match:
+        return match.group(1)
+    old_match = re.search(r"([a-z\-]+(?:\.[A-Z]{2})?/\d{7})(?:v\d+)?", text, re.I)
+    if old_match:
+        return old_match.group(1)
+    return normalize_text(text)
+
+
+def arxiv_abs_url(value: str | None) -> str:
+    key = canonical_arxiv_id(value)
+    if key and re.search(r"\d{4}\.\d{4,5}|/\d{7}", key):
+        return f"https://arxiv.org/abs/{key}"
+    text = str(value or "")
+    return text
+
+
+def arxiv_pdf_url(value: str | None) -> str:
+    key = canonical_arxiv_id(value)
+    if key and re.search(r"\d{4}\.\d{4,5}|/\d{7}", key):
+        return f"https://arxiv.org/pdf/{key}"
+    text = str(value or "")
+    return text.replace("/abs/", "/pdf/")
+
+
+def clean_list_field(text: str, descriptor: str) -> str:
+    text = normalize_text(text)
+    return re.sub(rf"^{re.escape(descriptor)}:\s*", "", text, flags=re.I)
+
+
+def parse_list_day(text: str) -> datetime | None:
+    # Examples from arXiv list pages: "Fri, 5 Jun 2026".
+    match = re.search(r"\b(Mon|Tue|Wed|Thu|Fri|Sat|Sun),\s+(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})\b", text)
+    if not match:
+        return None
+    try:
+        return datetime.strptime(match.group(0), "%a, %d %b %Y").replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
 
 
 def extract_authors(entry: Any, description_text: str) -> list[str]:
@@ -311,6 +356,110 @@ def fetch_rss_source(category: str, source_title: str, limit: int) -> list[dict[
     return papers
 
 
+def fetch_list_source(category: str, source_title: str, per_day_limit: int) -> list[dict[str, Any]]:
+    """Fetch arXiv's recent HTML list.
+
+    RSS usually exposes only the current update batch. The recent list
+    page contains several date sections, so it gives a useful initial history
+    without using export.arxiv.org/api/query.
+    """
+    show = max(1000, min(2000, per_day_limit * 10))
+    url = f"https://arxiv.org/list/{category}/recent?show={show}"
+    print(f"Fetching list page: {url}")
+
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": USER_AGENT,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        html_doc = resp.read().decode("utf-8", errors="replace")
+
+    soup = BeautifulSoup(html_doc, "html.parser")
+    current_day: datetime | None = None
+    pending: dict[str, Any] | None = None
+    papers: list[dict[str, Any]] = []
+    per_day_counts: dict[str, int] = defaultdict(int)
+
+    for elem in soup.find_all(["h3", "dt", "dd"]):
+        if elem.name == "h3":
+            day = parse_list_day(elem.get_text(" ", strip=True))
+            if day:
+                current_day = day
+            continue
+
+        if elem.name == "dt":
+            abs_link = elem.find("a", href=re.compile(r"^/abs/"))
+            if not abs_link:
+                pending = None
+                continue
+            href = abs_link.get("href", "")
+            arxiv_id = href.rsplit("/", 1)[-1]
+            pending = {
+                "id": arxiv_abs_url(arxiv_id),
+                "pdf_url": arxiv_pdf_url(arxiv_id),
+                "published": format_iso(current_day or utc_now()),
+                "updated": format_iso(current_day or utc_now()),
+                "subject": source_title,
+                "category": category,
+            }
+            continue
+
+        if elem.name == "dd" and pending:
+            day_key = (current_day or utc_now()).strftime("%Y-%m-%d")
+            if per_day_counts[day_key] >= per_day_limit:
+                pending = None
+                continue
+
+            title_div = elem.find(class_=re.compile(r"list-title"))
+            authors_div = elem.find(class_=re.compile(r"list-authors"))
+            comments_div = elem.find(class_=re.compile(r"list-comments"))
+            subjects_div = elem.find(class_=re.compile(r"list-subjects"))
+
+            title = clean_list_field(title_div.get_text(" ", strip=True), "Title") if title_div else "Untitled"
+            authors: list[str] = []
+            if authors_div:
+                authors = [normalize_text(a.get_text(" ", strip=True)) for a in authors_div.find_all("a")]
+                authors = [a for a in authors if a]
+                if not authors:
+                    authors_text = clean_list_field(authors_div.get_text(" ", strip=True), "Authors")
+                    authors = [x.strip() for x in re.split(r",\s*|;\s*", authors_text) if x.strip()]
+
+            comment = None
+            if comments_div:
+                comment = clean_list_field(comments_div.get_text(" ", strip=True), "Comments") or None
+
+            subjects = clean_list_field(subjects_div.get_text(" ", strip=True), "Subjects") if subjects_div else ""
+
+            # The recent page normally has no abstract. If a short abstract-like
+            # paragraph is present, keep it; otherwise the current RSS/cache merge can fill it.
+            meta = elem.find(class_=re.compile(r"meta"))
+            summary = ""
+            if meta:
+                meta_copy = BeautifulSoup(str(meta), "html.parser")
+                for known in meta_copy.find_all(class_=re.compile(r"list-(title|authors|comments|subjects|journal-ref)")):
+                    known.decompose()
+                summary = normalize_text(meta_copy.get_text(" ", strip=True))
+
+            pending.update(
+                {
+                    "title": title,
+                    "authors": authors,
+                    "summary": summary,
+                    "comment": comment,
+                    "subjects": subjects,
+                }
+            )
+            papers.append(pending)
+            per_day_counts[day_key] += 1
+            pending = None
+
+    print(f"Fetched {len(papers)} recent list entries for {category}")
+    return papers
+
+
 def load_remote_cache(cache_url: str | None) -> list[dict[str, Any]]:
     if not cache_url:
         return []
@@ -351,13 +500,13 @@ def normalize_cached_paper(paper: dict[str, Any], default_subject: str = "") -> 
         authors = [a.strip() for a in re.split(r",\s*|;\s*", authors) if a.strip()]
 
     return {
-        "id": str(paper.get("id") or paper.get("entry_url") or paper.get("link") or paper.get("title") or ""),
+        "id": arxiv_abs_url(str(paper.get("id") or paper.get("entry_url") or paper.get("link") or paper.get("title") or "")),
         "title": normalize_text(str(paper.get("title") or "Untitled")),
         "authors": [str(a) for a in authors],
         "summary": normalize_text(str(paper.get("summary") or paper.get("abstract") or "")),
         "published": str(paper.get("published") or paper.get("updated") or format_iso(utc_now())),
         "updated": str(paper.get("updated") or paper.get("published") or format_iso(utc_now())),
-        "pdf_url": str(paper.get("pdf_url") or paper.get("pdf") or ""),
+        "pdf_url": str(paper.get("pdf_url") or paper.get("pdf") or arxiv_pdf_url(paper.get("id") or paper.get("entry_url") or paper.get("link") or "")),
         "comment": paper.get("comment"),
         "subject": str(paper.get("subject") or paper.get("source_title") or default_subject or paper.get("category") or "arXiv"),
         "category": str(paper.get("category") or paper.get("primary_category") or ""),
@@ -377,9 +526,18 @@ def build_papers(config: dict[str, Any]) -> list[dict[str, Any]]:
         limit = max(1, int(source.get("limit", 150)))
 
         try:
+            fetched.extend(fetch_list_source(category, source_title, max(limit, 500)))
+        except Exception as exc:
+            print(f"Failed to fetch recent list for {category}: {exc}")
+
+        time.sleep(3.2)
+
+        # RSS has richer abstracts for the current update batch, so merge it after
+        # the list page and let it fill/overwrite summary fields for the same papers.
+        try:
             fetched.extend(fetch_rss_source(category, source_title, limit))
         except Exception as exc:
-            print(f"Failed to fetch {category}: {exc}")
+            print(f"Failed to fetch RSS for {category}: {exc}")
 
         time.sleep(3.2)
 
@@ -389,7 +547,14 @@ def build_papers(config: dict[str, Any]) -> list[dict[str, Any]]:
         if paper_date(paper) < cutoff:
             continue
         # Keep per-subject rows so the same arXiv item can appear under different configured subjects.
-        key = f"{paper.get('id')}|{paper.get('subject')}"
+        key = f"{canonical_arxiv_id(str(paper.get('id') or ''))}|{paper.get('subject')}"
+        old = merged.get(key)
+        if old:
+            # Prefer entries with a non-empty summary/comment while keeping newer metadata.
+            if not paper.get("summary") and old.get("summary"):
+                paper["summary"] = old.get("summary")
+            if not paper.get("comment") and old.get("comment"):
+                paper["comment"] = old.get("comment")
         merged[key] = paper
 
     papers = sorted(merged.values(), key=paper_date, reverse=True)
@@ -431,7 +596,7 @@ def render_index(papers: list[dict[str, Any]], config: dict[str, Any], hcfg: Hig
                 recycle = "♻" if updated[:10] != published[:10] else ""
                 link = html.escape(str(paper.get("id") or ""), quote=True)
                 pdf_url = html.escape(str(paper.get("pdf_url") or ""), quote=True)
-                summary = html.escape(str(paper.get("summary") or ""))
+                summary = html.escape(str(paper.get("summary") or "（列表页没有提供摘要；等这篇出现在 RSS 或旧 cache 后会自动补全。）"))
 
                 comment_block = ""
                 if comment:
