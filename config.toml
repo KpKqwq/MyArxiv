@@ -7,20 +7,20 @@ limit = 4000
 category = "cs.CL"
 title = "Computation and Language"
 
-[[sources]]
-limit = 1000
-category = "cs.RO"
-title = "VLA"
+# [[sources]]
+# limit = 1000
+# category = "cs.RO"
+# title = "VLA"
 
 # [[sources]]
 # limit = 150
 # category = "cs.CV"
 # title = "Computer Vision and Pattern Recognition"
 
-[[sources]]
-limit = 1000
-category = "cs.IR"
-title = "Information Retrieval"
+# [[sources]]
+# limit = 1000
+# category = "cs.IR"
+# title = "Information Retrieval"
 
 # [[sources]]
 # limit = 150
