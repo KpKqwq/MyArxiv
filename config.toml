@@ -1,5 +1,5 @@
 site_title = "MyArxiv"
-limit_days = 14
+limit_days = 7
 cache_url = "https://KpKqwq.github.io/MyArxiv/cache.json"
 [[sources]]
 limit = 4000
@@ -26,10 +26,10 @@ title = "Computation and Language"
 # category = "cs.LG"
 # title = "Machine Learning"
 
-[[sources]]
-limit = 1000
-category = "cs.MM"
-title = "Multimedia"
+# [[sources]]
+# limit = 1000
+# category = "cs.MM"
+# title = "Multimedia"
 
 [scripts]
 highlight_title = "scripts/highlight_title.rhai"
