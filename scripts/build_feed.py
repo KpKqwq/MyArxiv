@@ -573,61 +573,80 @@ def group_by_day_and_subject(papers: list[dict[str, Any]]) -> dict[str, dict[str
     return grouped
 
 
-def render_index(papers: list[dict[str, Any]], config: dict[str, Any], hcfg: HighlightConfig) -> str:
-    highlight_title, highlight_author, highlight_conference = make_highlighters(hcfg)
-    site_title = html.escape(str(config.get("site_title") or "MyArxiv"))
-    build_time = utc_now()
-    grouped = group_by_day_and_subject(papers)
+PAPERS_PER_PAGE = 50
 
-    sections: list[str] = []
+
+def chunked(values: list[dict[str, Any]], size: int) -> Iterable[list[dict[str, Any]]]:
+    for index in range(0, len(values), size):
+        yield values[index:index + size]
+
+
+def paper_display_record(paper: dict[str, Any], hcfg: HighlightConfig) -> dict[str, Any]:
+    highlight_title, highlight_author, highlight_conference = make_highlighters(hcfg)
+    authors = paper.get("authors") or []
+    if not isinstance(authors, list):
+        authors = [str(authors)]
+    comment = paper.get("comment")
+    return {
+        "id": str(paper.get("id") or ""),
+        "pdf_url": str(paper.get("pdf_url") or ""),
+        "title_html": highlight_title(str(paper.get("title") or "Untitled"), authors),
+        "authors_html": highlight_author(authors),
+        "conference_html": highlight_conference(str(comment) if comment else None),
+        "revised": str(paper.get("updated") or "")[:10] != str(paper.get("published") or "")[:10],
+        "summary": str(paper.get("summary") or "列表页没有提供摘要。"),
+        "comment": str(comment) if comment else "",
+    }
+
+
+def write_paper_chunks(
+    papers: list[dict[str, Any]], output_dir: Path, hcfg: HighlightConfig | None = None,
+    page_size: int = PAPERS_PER_PAGE,
+) -> dict[str, Any]:
+    if page_size < 1:
+        raise ValueError("page_size must be positive")
+
+    hcfg = hcfg or HighlightConfig([], [], [])
+    grouped = group_by_day_and_subject(papers)
+    days: list[dict[str, Any]] = []
+
     for day in sorted(grouped.keys(), reverse=True):
-        subject_html: list[str] = []
+        subjects: list[dict[str, Any]] = []
         for subject in sorted(grouped[day].keys()):
             subject_papers = grouped[day][subject]
-            items: list[str] = []
-            for paper in subject_papers:
-                title = str(paper.get("title") or "Untitled")
-                authors = paper.get("authors") or []
-                if not isinstance(authors, list):
-                    authors = [str(authors)]
-                comment = paper.get("comment")
-                updated = str(paper.get("updated") or "")
-                published = str(paper.get("published") or "")
-                recycle = "♻" if updated[:10] != published[:10] else ""
-                link = html.escape(str(paper.get("id") or ""), quote=True)
-                pdf_url = html.escape(str(paper.get("pdf_url") or ""), quote=True)
-                summary = html.escape(str(paper.get("summary") or "（列表页没有提供摘要；等这篇出现在 RSS 或旧 cache 后会自动补全。）"))
+            slug = re.sub(r"[^a-z0-9]+", "-", subject.lower()).strip("-") or "arxiv"
+            pages: list[dict[str, str]] = []
+            for page_number, paper_page in enumerate(chunked(subject_papers, page_size), start=1):
+                relative_path = Path("data") / day / f"{slug}-{page_number}.json"
+                destination = output_dir / relative_path
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                displayed = [paper_display_record(paper, hcfg) for paper in paper_page]
+                destination.write_text(json.dumps(displayed, ensure_ascii=False), encoding="utf-8")
+                pages.append({"url": relative_path.as_posix()})
+            subjects.append({"subject": subject, "paper_count": len(subject_papers), "pages": pages})
+        days.append({"day": day, "subjects": subjects})
 
-                comment_block = ""
-                if comment:
-                    comment_block = f'''
-        <div class="article-summary-box-inner">
-          <span class="chip">comment</span>: <span>{html.escape(str(comment))}</span>
-        </div>'''
+    return {"page_size": page_size, "days": days}
 
-                items.append(f'''
-      <article>
-        <details class="article-expander">
-          <summary class="article-expander-title">
-            {recycle} {highlight_title(title, authors)} {highlight_conference(str(comment) if comment else None)}
-          </summary>
-          <div class="article-authors">
-            <a href="{link}"><i class="ri-links-line"></i></a>
-            <a href="{pdf_url}"><i class="ri-file-paper-2-line"></i></a>
-            {highlight_author(authors)}
-          </div>
-          <div class="article-summary-box-inner">
-            <span>{summary}</span>
-          </div>{comment_block}
-        </details>
-      </article>''')
 
+def render_index(catalog: dict[str, Any], config: dict[str, Any]) -> str:
+    site_title = html.escape(str(config.get("site_title") or "MyArxiv"))
+    build_time = utc_now()
+
+    sections: list[str] = []
+    for day_entry in catalog["days"]:
+        day = day_entry["day"]
+        subject_html: list[str] = []
+        for subject_entry in day_entry["subjects"]:
+            subject = html.escape(subject_entry["subject"])
+            pages = html.escape(json.dumps(subject_entry["pages"]), quote=True)
             subject_html.append(f'''
     <article>
-      <details>
-        <summary>{html.escape(subject)} <span class="chip" style="font-size: 60%">{len(subject_papers)}</span></summary>
-        <div class="details-content">
-          {''.join(items)}
+      <details class="subject-expander" data-pages="{pages}">
+        <summary>{subject} <span class="chip" style="font-size: 60%">{subject_entry["paper_count"]}</span></summary>
+        <div class="details-content" aria-live="polite">
+          <div class="paper-list"></div>
+          <div class="paper-load-sentinel"></div>
         </div>
       </details>
     </article>''')
@@ -655,24 +674,6 @@ def render_index(papers: list[dict[str, Any]], config: dict[str, Any], hcfg: Hig
           integrity="sha384-z1fJDqw8ZApjGO3/unPWUPsIymfsJmyrDVWC8Tv/a1HeOtGmkwNd/7xUS0Xcnvsx" crossorigin="anonymous"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.15.1/dist/contrib/auto-render.min.js"
           integrity="sha384-+XBljXPPiv+OzfbB3cVmLHf4hdUFHlWNZN5spNQ7rmHTXpd7WvJum6fIACpNNfIR" crossorigin="anonymous"></script>
-  <script>
-    document.addEventListener("DOMContentLoaded", function () {{
-      renderMathInElement(document.body, {{
-        delimiters: [
-          {{left: '$$', right: '$$', display: true}},
-          {{left: '$', right: '$', display: false}},
-          {{left: '\\(', right: '\\)', display: false}},
-          {{left: '\\[', right: '\\]', display: true}},
-          {{left: "\\begin{{equation}}", right: "\\end{{equation}}", display: true}},
-          {{left: "\\begin{{align}}", right: "\\end{{align}}", display: true}},
-          {{left: "\\begin{{alignat}}", right: "\\end{{alignat}}", display: true}},
-          {{left: "\\begin{{gather}}", right: "\\end{{gather}}", display: true}},
-          {{left: "\\begin{{CD}}", right: "\\end{{CD}}", display: true}},
-        ],
-        throwOnError: false
-      }});
-    }});
-  </script>
 </head>
 <body>
 <section class="header-container">
@@ -754,11 +755,13 @@ def main() -> None:
     print(f"Highlight terms: titles={len(hcfg.title_terms)}, authors={len(hcfg.author_terms)}, conferences={len(hcfg.conference_terms)}")
 
     (OUT_DIR / "cache.json").write_text(json.dumps(papers, ensure_ascii=False, indent=2), encoding="utf-8")
-    (OUT_DIR / "index.html").write_text(render_index(papers, config, hcfg), encoding="utf-8")
+    catalog = write_paper_chunks(papers, OUT_DIR, hcfg)
+    (OUT_DIR / "catalog.json").write_text(json.dumps(catalog, ensure_ascii=False, indent=2), encoding="utf-8")
+    (OUT_DIR / "index.html").write_text(render_index(catalog, config), encoding="utf-8")
     write_rss(papers, config)
     copy_static_assets()
 
-    print("Generated target/index.html, target/cache.json, target/rss.xml")
+    print("Generated target/index.html, target/catalog.json, target/cache.json, target/rss.xml")
 
 
 if __name__ == "__main__":
