@@ -1,0 +1,115 @@
+{
+  "page_size": 50,
+  "days": [
+    {
+      "day": "2026-10-30",
+      "subjects": [
+        {
+          "subject": "Computation and Language",
+          "paper_count": 264,
+          "pages": [
+            {
+              "url": "data/2026-10-30/computation-and-language-1.json"
+            },
+            {
+              "url": "data/2026-10-30/computation-and-language-2.json"
+            },
+            {
+              "url": "data/2026-10-30/computation-and-language-3.json"
+            },
+            {
+              "url": "data/2026-10-30/computation-and-language-4.json"
+            },
+            {
+              "url": "data/2026-10-30/computation-and-language-5.json"
+            },
+            {
+              "url": "data/2026-10-30/computation-and-language-6.json"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "day": "2026-10-28",
+      "subjects": [
+        {
+          "subject": "Computation and Language",
+          "paper_count": 166,
+          "pages": [
+            {
+              "url": "data/2026-10-28/computation-and-language-1.json"
+            },
+            {
+              "url": "data/2026-10-28/computation-and-language-2.json"
+            },
+            {
+              "url": "data/2026-10-28/computation-and-language-3.json"
+            },
+            {
+              "url": "data/2026-10-28/computation-and-language-4.json"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "day": "2026-10-27",
+      "subjects": [
+        {
+          "subject": "Computation and Language",
+          "paper_count": 364,
+          "pages": [
+            {
+              "url": "data/2026-10-27/computation-and-language-1.json"
+            },
+            {
+              "url": "data/2026-10-27/computation-and-language-2.json"
+            },
+            {
+              "url": "data/2026-10-27/computation-and-language-3.json"
+            },
+            {
+              "url": "data/2026-10-27/computation-and-language-4.json"
+            },
+            {
+              "url": "data/2026-10-27/computation-and-language-5.json"
+            },
+            {
+              "url": "data/2026-10-27/computation-and-language-6.json"
+            },
+            {
+              "url": "data/2026-10-27/computation-and-language-7.json"
+            },
+            {
+              "url": "data/2026-10-27/computation-and-language-8.json"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "day": "2026-10-26",
+      "subjects": [
+        {
+          "subject": "Computation and Language",
+          "paper_count": 161,
+          "pages": [
+            {
+              "url": "data/2026-10-26/computation-and-language-1.json"
+            },
+            {
+              "url": "data/2026-10-26/computation-and-language-2.json"
+            },
+            {
+              "url": "data/2026-10-26/computation-and-language-3.json"
+            },
+            {
+              "url": "data/2026-10-26/computation-and-language-4.json"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
